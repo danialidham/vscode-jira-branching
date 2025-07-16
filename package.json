@@ -1,16 +1,26 @@
 {
   "name": "vscode-jira-branching",
   "displayName": "vscode-jira-branching",
-  "description": "",
-  "version": "0.0.1",
+  "publisher": "danialidhamyahya",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/danialidham/vscode-jira-branching"
+  },
+  "description": "VS Code extension to create Git branches from assigned Jira tickets.",
+  "version": "0.0.2",
   "engines": {
     "vscode": "^1.102.0"
   },
   "categories": [
-    "Other"
+    "Other",
+    "SCM"
   ],
-  "activationEvents": [],
-  "main": "./out/extension.js",
+  "activationEvents": [
+    "onView:jiraIssuesView",
+    "onCommand:jiraBrancher.createBranch",
+    "onCommand:jiraBrancher.createBranchFromItem"
+  ],
+  "main": "./dist/extension.js",
   "contributes": {
     "configuration": {
       "title": "Jira Brancher",
@@ -19,17 +29,63 @@
           "type": "string",
           "default": "",
           "description": "Your Jira domain, e.g., mycompany.atlassian.net"
+        },
+        "jiraBrancher.jiraEmail": {
+          "type": "string",
+          "default": "",
+          "description": "Your Jira account email"
+        },
+        "jiraBrancher.jiraToken": {
+          "type": "string",
+          "default": "",
+          "description": "Your Jira API token"
         }
       }
+    },
+    "commands": [
+      {
+        "command": "jiraBrancher.createBranch",
+        "title": "Jira Brancher: Create Branch"
+      },
+      {
+        "command": "jiraBrancher.createBranchFromItem",
+        "title": "Create Branch from this Issue"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "jiraBrancherViewContainer",
+          "title": "Jira Brancher",
+          "icon": "./icon-danial.svg"
+        }
+      ]
+    },
+    "views": {
+      "jiraBrancherViewContainer": [
+        {
+          "id": "jiraIssuesView",
+          "name": "My Jira Issues"
+        }
+      ]
+    },
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "jiraBrancher.createBranchFromItem",
+          "when": "view == jiraIssuesView",
+          "group": "inline"
+        }
+      ]
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src",
-    "test": "vscode-test"
+    "test": "vscode-test",
+    "compile": "node esbuild.config.js",
+    "vscode:prepublish": "npm run compile"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
@@ -39,6 +95,8 @@
     "@typescript-eslint/parser": "^8.31.1",
     "@vscode/test-cli": "^0.0.11",
     "@vscode/test-electron": "^2.5.2",
+    "esbuild": "^0.25.6",
+    "esbuild-register": "^3.6.0",
     "eslint": "^9.25.1",
     "typescript": "^5.8.3"
   },
