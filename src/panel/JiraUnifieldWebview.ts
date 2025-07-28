@@ -72,7 +72,6 @@ export class JiraUnifiedWebviewProvider implements vscode.WebviewViewProvider {
 
         const cwd = await getGitRoot();
 
-        console.log('⚙️ Using Git repo at:', cwd);
        if (!cwd) {
           this._view?.webview.postMessage({ command: 'hideBranchForm' });
           return;
