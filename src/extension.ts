@@ -1,154 +1,96 @@
 import * as vscode from 'vscode';
 import { exec } from 'child_process';
-import axios from 'axios';
+import { JiraUnifiedWebviewProvider } from './panel/JiraUnifieldWebview';
+import { getGitRoot } from './gitHelper';
 
-interface JiraSearchResult {
-  issues: Array<{
-    key: string;
-    fields: {
-      summary: string;
-      status: { name: string };
-    };
-  }>;
+async function ensureGitRepo(cwd: string): Promise<boolean> {
+  return new Promise(resolve => {
+    exec('git rev-parse --is-inside-work-tree', { cwd }, err => {
+      if (err) {
+        vscode.window.showErrorMessage('Not a Git repository');
+        resolve(false);
+      } else {
+        resolve(true);
+      }
+    });
+  });
 }
 
-class JiraIssueTreeItem extends vscode.TreeItem {
-  constructor(
-    public readonly issueKey: string,
-    public readonly summary: string,
-    public readonly status: string
-  ) {
-    super(`${issueKey}: ${summary}`, vscode.TreeItemCollapsibleState.None);
-    this.description = status;
-    this.contextValue = 'jiraIssueItem';
-  }
+export function activate(context: vscode.ExtensionContext): void {
+  const webviewProvider = new JiraUnifiedWebviewProvider(context.extensionUri);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(
+      JiraUnifiedWebviewProvider.viewType,
+      webviewProvider
+    )
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      'jiraBrancher.createBranch',
+      async (issueKey: string): Promise<void> => {
+        await promptForBranch(issueKey);
+      }
+    )
+  );
 }
 
-class JiraIssuesProvider implements vscode.TreeDataProvider<JiraIssueTreeItem> {
-  private _onDidChangeTreeData = new vscode.EventEmitter<JiraIssueTreeItem | undefined | void>();
-  readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
+export function deactivate(): void {}
 
-  private items: JiraIssueTreeItem[] = [];
-
-  refresh(items: JiraIssueTreeItem[]) {
-    this.items = items;
-    this._onDidChangeTreeData.fire();
+async function promptForBranch(issueKey: string): Promise<void> {
+  const branchType = await vscode.window.showQuickPick(
+    ['feat', 'fix', 'docs', 'hotfix', 'refactor'],
+    { placeHolder: 'Select branch type' }
+  );
+  if (!branchType) {
+    return;
   }
 
-  getTreeItem(item: JiraIssueTreeItem): vscode.TreeItem {
-    return item;
+  const title = await vscode.window.showInputBox({
+    prompt: 'Enter branch title',
+    validateInput: (input: string) => {
+      if (input.trim() === '') {
+        return 'Title is required';
+      }
+      return undefined;
+    }
+  });
+  if (!title) {
+    return;
   }
 
-  getChildren(): Thenable<JiraIssueTreeItem[]> {
-    return Promise.resolve(this.items);
+  const slug = title.trim().toLowerCase().replace(/\s+/g, '-');
+  const branchName = `${branchType}/${issueKey}-${slug}`;
+
+  // locate the Git repo via VS Code Git API
+  const gitExt = vscode.extensions.getExtension('vscode.git');
+  if (!gitExt) {
+    vscode.window.showErrorMessage('Git extension not available');
+    return;
   }
-}
+  const gitApi = gitExt.isActive
+    ? gitExt.exports.getAPI(1)
+    : (await gitExt.activate(), gitExt.exports.getAPI(1));
+  const repo = gitApi.repositories[0];
+  if (!repo) {
+    vscode.window.showErrorMessage('No Git repository detected in your workspace');
+    return;
+  }
+  const cwd = await getGitRoot();
+  if (!cwd) { return; } // bail out early
 
-export async function activate(context: vscode.ExtensionContext) {
-  const config = vscode.workspace.getConfiguration('jiraBrancher');
-
-  const provider = new JiraIssuesProvider();
-  vscode.window.registerTreeDataProvider('jiraIssuesView', provider);
-
-  async function fetchJiraIssues(): Promise<JiraIssueTreeItem[] | null> {
-    const domain = config.get<string>('jiraDomain');
-    const email = config.get<string>('jiraEmail');
-    const token = config.get<string>('jiraToken');
-
-    console.log('Domain:', domain);
-console.log('Email:', email);
-console.log('Token:', token ? '✓' : 'Missing');
-
-
-    if (!domain || !email || !token) {
-      vscode.window.showErrorMessage('Missing Jira settings. Please set jiraDomain, jiraEmail, and jiraToken in your VS Code settings.');
-      return null;
+  exec('git rev-parse --is-inside-work-tree', { cwd }, (insideErr) => {
+    if (insideErr) {
+      vscode.window.showErrorMessage('Not a Git repository');
+      return;
     }
 
-    const auth = Buffer.from(`${email}:${token}`).toString('base64');
-
-    try {
-      const res = await axios.get<JiraSearchResult>(
-        `https://${domain}/rest/api/3/search?jql=assignee=currentuser()`,
-        {
-          headers: {
-            Authorization: `Basic ${auth}`,
-            Accept: 'application/json'
-          }
-        }
-      );
-
-      return res.data.issues.map(issue => new JiraIssueTreeItem(
-        issue.key,
-        issue.fields.summary,
-        issue.fields.status.name
-      ));
-    } catch (err: any) {
-      console.error('Jira fetch failed:', err);
-      vscode.window.showErrorMessage(`Failed to fetch Jira issues: ${err.message}`);
-      return null;
-    }
-  }
-
-  async function promptForBranch(issueKey: string) {
-    const branchType = await vscode.window.showQuickPick(
-      ['feat', 'fix', 'docs', 'hotfix', 'refactor'].map(label => ({ label })),
-      { placeHolder: 'Select branch type' }
-    );
-    if (!branchType) return;
-
-    const title = await vscode.window.showInputBox({
-      prompt: 'Enter branch title',
-      validateInput: text => text.trim() === '' ? 'Title required' : undefined
-    });
-    if (!title) return;
-
-    const description = await vscode.window.showInputBox({
-      prompt: 'Optional: add description',
-      ignoreFocusOut: true
-    });
-
-    const slug = title.trim().toLowerCase().replace(/\s+/g, '-');
-    const branchName = `${branchType.label}/${issueKey}-${slug}`;
-
-    exec(`git checkout -b ${branchName}`, (err, stdout, stderr) => {
+    exec(`git checkout -b ${branchName}`, { cwd }, (err, _stdout, stderr) => {
       if (err) {
         vscode.window.showErrorMessage(`Git error: ${stderr}`);
       } else {
         vscode.window.showInformationMessage(`Created branch: ${branchName}`);
       }
     });
-
-    if (description) {
-      console.log('Branch description:', description);
-    }
-  }
-
-  context.subscriptions.push(vscode.commands.registerCommand('jiraBrancher.createBranch', async () => {
-    const issues = await fetchJiraIssues();
-    if (!issues) return;
-
-    provider.refresh(issues);
-
-    const pick = await vscode.window.showQuickPick<{ label: string; issueKey: string }>(
-      issues.map(i => ({
-        label: typeof i.label === 'string' ? i.label : (typeof i.label?.label === 'string' ? i.label.label : i.issueKey),
-        issueKey: i.issueKey
-      })),
-      { placeHolder: 'Select Jira ticket' }
-    );
-    if (!pick) return;
-
-    await promptForBranch(pick.issueKey);
-  }));
-
-  context.subscriptions.push(vscode.commands.registerCommand('jiraBrancher.createBranchFromItem', async (item: JiraIssueTreeItem) => {
-    if (!item) return;
-    await promptForBranch(item.issueKey);
-  }));
-
-  const issues = await fetchJiraIssues();
-  if (issues) provider.refresh(issues);
+  });
 }
-
-export function deactivate() {}
